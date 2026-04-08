@@ -1,0 +1,31 @@
+{
+    "compiler_basics": {
+      "title": "What is a Compiler?",
+      "content": "A compiler converts high-level programming language code into machine code. It processes the program through multiple phases such as lexical analysis, syntax analysis, intermediate representation, optimization, and code generation."
+    },
+  
+    "lexical_analysis": {
+      "title": "Lexical Analysis",
+      "content": "Lexical analysis is the first phase of a compiler where the input string is broken into tokens. Example: 'starts with digit' becomes ['starts','with','digit']."
+    },
+  
+    "syntax_analysis": {
+      "title": "Syntax Analysis",
+      "content": "Syntax analysis checks whether the sequence of tokens follows the rules of a grammar."
+    },
+  
+    "ast": {
+      "title": "Abstract Syntax Tree",
+      "content": "AST is a simplified tree representation of the structure of input that removes unnecessary grammar symbols."
+    },
+  
+    "regular_expressions": {
+      "title": "Regular Expressions",
+      "content": "Regular expressions are patterns used to match character combinations in strings."
+    },
+  
+    "dfa_nfa": {
+      "title": "DFA vs NFA",
+      "content": "DFA has exactly one transition for each symbol. NFA can have multiple possible transitions."
+    }
+  }

@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>RegexEdu – Dashboard</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet"/>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+</head>
+<body class="dashboard-body">
+
+  <script>
+    if(!sessionStorage.getItem("regex_edu_user")){
+      window.location.href="/";
+    }
+    </script>
+
+  <!-- TOP HEADER -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <div class="brand-icon small">
+        <span class="bracket">[</span><span class="regex-char">.*</span><span class="bracket">]</span>
+      </div>
+      <span class="topbar-title">RegexEdu</span>
+      <span class="topbar-sub">Compiler Learning Tool</span>
+    </div>
+    <div class="topbar-right">
+      <span class="user-badge" id="user-badge">Loading...</span>
+      <button class="btn-logout" onclick="logoutUser()">LOGOUT</button>
+    </div>
+  </header>
+
+  <div class="dashboard-layout">
+
+    <!-- SIDEBAR NAV -->
+    <nav class="sidebar">
+      <ul class="nav-list">
+        <li class="nav-item active" data-tab="converter" onclick="switchTab('converter', this)">
+          <span class="nav-icon">⌥</span>
+          <span class="nav-label">Pattern Converter</span>
+        </li>
+        <li class="nav-item" data-tab="lab" onclick="switchTab('lab', this)">
+          <span class="nav-icon">⚗</span>
+          <span class="nav-label">Lab Practice</span>
+        </li>
+        <li class="nav-item" data-tab="phases" onclick="switchTab('phases', this)">
+          <span class="nav-icon">⊕</span>
+          <span class="nav-label">Compiler Phases</span>
+        </li>
+        <li class="nav-item" data-tab="history" onclick="switchTab('history', this)">
+          <span class="nav-icon">⏱</span>
+          <span class="nav-label">History</span>
+        </li>
+        <li class="nav-item" data-tab="theory" onclick="switchTab('theory', this)">
+          <span class="nav-icon">📖</span>
+          <span class="nav-label">Theory Notes</span>
+        </li>
+      </ul>
+      <div class="sidebar-glow"></div>
+    </nav>
+
+    <!-- MAIN CONTENT -->
+    <main class="main-content">
+
+      <!-- ─── TAB: PATTERN CONVERTER ─── -->
+      <section class="tab-panel active" id="tab-converter">
+        <div class="panel-header">
+          <h2 class="panel-title">Pattern Converter</h2>
+          <p class="panel-desc">Describe a pattern in plain English and watch the compiler transform it into Regex.</p>
+        </div>
+
+        <div class="input-section card">
+          <div class="card-body">
+            <div class="form-group">
+              <label class="form-label">Enter Pattern Description</label>
+              <div class="textarea-wrapper">
+                <textarea id="pattern-input" class="form-textarea" rows="3"
+                  placeholder="e.g. words that start with capital letter followed by digits..."></textarea>
+              </div>
+            </div>
+            <div class="input-row">
+              <div class="form-group flex-1">
+                <label class="form-label">Mode</label>
+                <select id="mode-select" class="form-select">
+                  <option value="pattern">Pattern Mode</option>
+                  <option value="lab">Lab Mode</option>
+                </select>
+              </div>
+              <button class="btn-primary generate-btn" onclick="processInput()">
+                <span class="btn-text">GENERATE REGEX</span>
+                <span class="btn-spinner hidden" id="generate-spinner">⟳</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick result preview -->
+        <div id="quick-result" class="quick-result card hidden">
+          <div class="card-body">
+            <div class="result-row">
+              <span class="result-label">Generated Regex</span>
+              <code class="result-regex" id="quick-regex">—</code>
+              <button class="btn-copy" onclick="copyToClipboard('quick-regex')" title="Copy">⎘</button>
+            </div>
+            <div class="result-row">
+              <span class="result-label">Classification</span>
+              <span class="badge-classification" id="quick-class">—</span>
+            </div>
+            <a class="view-phases-link" onclick="switchTab('phases', null)">View full compiler phases →</a>
+          </div>
+        </div>
+
+        <!-- REGEX TESTER -->
+        <div class="card tester-card">
+          <div class="card-header">
+            <h3 class="card-title">Regex Tester</h3>
+          </div>
+          <div class="card-body">
+            <div class="tester-row">
+              <div class="input-wrapper flex-1">
+                <span class="input-prefix">ƒ</span>
+                <input type="text" id="regex-pattern-tester" class="form-input" placeholder="Regex pattern (auto-filled or enter manually)"/>
+              </div>
+            </div>
+            <div class="tester-row" style="margin-top:12px">
+              <div class="input-wrapper flex-1">
+                <span class="input-prefix">»</span>
+                <input type="text" id="test-string" class="form-input" placeholder="Enter string to test..."/>
+              </div>
+              <button class="btn-secondary" onclick="testRegex()">TEST</button>
+            </div>
+            <div id="test-result" class="test-result hidden"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ─── TAB: LAB PRACTICE ─── -->
+      <section class="tab-panel" id="tab-lab">
+        <div class="panel-header">
+          <h2 class="panel-title">Lab Practice</h2>
+          <p class="panel-desc">Practice common regex challenges used in compiler design labs.</p>
+        </div>
+
+        <div class="lab-grid">
+          <div class="lab-problem card" onclick="loadLabProblem(this)" data-problem="Match all valid email addresses">
+            <div class="lab-badge">01</div>
+            <h4 class="lab-title">Email Validator</h4>
+            <p class="lab-desc">Match all valid email addresses in a text block.</p>
+            <span class="lab-tag">Strings</span>
+          </div>
+          <div class="lab-problem card" onclick="loadLabProblem(this)" data-problem="Match integers and floating point numbers">
+            <div class="lab-badge">02</div>
+            <h4 class="lab-title">Number Literals</h4>
+            <p class="lab-desc">Match integers and floating point numbers.</p>
+            <span class="lab-tag">Numerics</span>
+          </div>
+          <div class="lab-problem card" onclick="loadLabProblem(this)" data-problem="Match identifiers that start with a letter followed by letters or digits">
+            <div class="lab-badge">03</div>
+            <h4 class="lab-title">Identifiers</h4>
+            <p class="lab-desc">Match valid programming language identifiers.</p>
+            <span class="lab-tag">Lexical</span>
+          </div>
+          <div class="lab-problem card" onclick="loadLabProblem(this)" data-problem="Match strings enclosed in double quotes with escape sequences">
+            <div class="lab-badge">04</div>
+            <h4 class="lab-title">String Literals</h4>
+            <p class="lab-desc">Match quoted strings with escape sequences.</p>
+            <span class="lab-tag">Tokens</span>
+          </div>
+          <div class="lab-problem card" onclick="loadLabProblem(this)" data-problem="Match valid IPv4 addresses with four octets between 0 and 255">
+            <div class="lab-badge">05</div>
+            <h4 class="lab-title">IPv4 Address</h4>
+            <p class="lab-desc">Match valid IPv4 addresses (0–255 per octet).</p>
+            <span class="lab-tag">Networks</span>
+          </div>
+          <div class="lab-problem card" onclick="loadLabProblem(this)" data-problem="Match words that are palindromes of length 3 or 5">
+            <div class="lab-badge">06</div>
+            <h4 class="lab-title">Palindromes</h4>
+            <p class="lab-desc">Detect palindrome patterns using backreferences.</p>
+            <span class="lab-tag">Advanced</span>
+          </div>
+        </div>
+
+        <div id="lab-input-area" class="card hidden" style="margin-top:24px">
+          <div class="card-header">
+            <h3 class="card-title" id="lab-problem-title">Problem</h3>
+          </div>
+          <div class="card-body">
+            <textarea id="lab-textarea" class="form-textarea" rows="2" readonly></textarea>
+            <div style="display:flex;gap:12px;margin-top:12px;align-items:center">
+              <select id="lab-mode-select" class="form-select" style="width:180px">
+                <option value="lab">Lab Mode</option>
+                <option value="pattern">Pattern Mode</option>
+              </select>
+              <button class="btn-primary" onclick="processLabInput()">SOLVE WITH COMPILER</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ─── TAB: COMPILER PHASES ─── -->
+      <section class="tab-panel" id="tab-phases">
+        <div class="panel-header">
+          <h2 class="panel-title">Compiler Phases Output</h2>
+          <p class="panel-desc">Step-by-step breakdown of each compiler phase applied to your input.</p>
+        </div>
+
+        <div id="phases-empty" class="empty-state">
+          <div class="empty-icon">⟨/⟩</div>
+          <p>Generate a regex first to see compiler phases here.</p>
+        </div>
+
+        <div id="phases-output" class="phases-grid hidden">
+
+          <!-- TOKENS -->
+          <div class="phase-card card">
+            <div class="phase-number">01</div>
+            <div class="phase-header">
+              <span class="phase-icon">⟦⟧</span>
+              <h3 class="phase-title">Tokenization</h3>
+              <span class="phase-subtitle">Lexical Analysis</span>
+            </div>
+            <div class="phase-body" id="phase-tokens">
+              <div class="token-list" id="token-list"></div>
+              <div class="symtab-block">
+                <div class="symtab-title">Symbol Table</div>
+                <div class="symtab-container" id="symtab-tokens"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- AST -->
+          <div class="phase-card card ast-card">
+            <div class="phase-number">02</div>
+            <div class="phase-header">
+              <span class="phase-icon">⊢</span>
+              <h3 class="phase-title">Abstract Syntax Tree</h3>
+              <span class="phase-subtitle">Parsing Phase</span>
+            </div>
+            <div class="phase-body">
+              <div id="ast-tree-container" class="ast-container"></div>
+              <pre id="ast-raw" class="ast-raw hidden"></pre>
+              <button class="btn-toggle-ast" onclick="toggleASTView()">Toggle Raw AST</button>
+              <div class="symtab-block" style="margin-top:14px">
+                <div class="symtab-title">Symbol Table</div>
+                <div class="symtab-container" id="symtab-ast"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- REGEX -->
+          <div class="phase-card card">
+            <div class="phase-number">03</div>
+            <div class="phase-header">
+              <span class="phase-icon">∑</span>
+              <h3 class="phase-title">Regex Generation</h3>
+              <span class="phase-subtitle">Code Generation</span>
+            </div>
+            <div class="phase-body">
+              <div class="regex-output-box">
+                <code id="phase-regex" class="regex-display">—</code>
+                <button class="btn-copy-sm" onclick="copyToClipboard('phase-regex')" title="Copy">⎘</button>
+              </div>
+              <div class="symtab-block" style="margin-top:14px">
+                <div class="symtab-title">Symbol Table</div>
+                <div class="symtab-container" id="symtab-regex"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- OPTIMIZED REGEX -->
+          <div class="phase-card card">
+            <div class="phase-number">04</div>
+            <div class="phase-header">
+              <span class="phase-icon">⚡</span>
+              <h3 class="phase-title">Optimized Regex</h3>
+              <span class="phase-subtitle">Optimization Phase</span>
+            </div>
+            <div class="phase-body">
+              <div class="regex-output-box optimized">
+                <code id="phase-optimized" class="regex-display">—</code>
+                <button class="btn-copy-sm" onclick="copyToClipboard('phase-optimized')" title="Copy">⎘</button>
+              </div>
+              <div class="symtab-block" style="margin-top:14px">
+                <div class="symtab-title">Symbol Table</div>
+                <div class="symtab-container" id="symtab-optimized_regex"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- DFA/NFA -->
+          <div class="phase-card card">
+            <div class="phase-number">05</div>
+            <div class="phase-header">
+              <span class="phase-icon">◈</span>
+              <h3 class="phase-title">Automata Classification</h3>
+              <span class="phase-subtitle">DFA / NFA Analysis</span>
+            </div>
+            <div class="phase-body">
+              <div id="classification-display" class="classification-box">
+                <span id="phase-class" class="class-label">—</span>
+              </div>
+              <div class="class-desc" id="class-description"></div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ─── TAB: HISTORY ─── -->
+      <section class="tab-panel" id="tab-history">
+        <div class="panel-header">
+          <h2 class="panel-title">History</h2>
+          <p class="panel-desc">Your previous regex generations and lab sessions.</p>
+        </div>
+        <div class="card">
+          <div class="card-body">
+            <div class="table-controls">
+              <input type="text" id="history-search" class="form-input search-input" placeholder="Search history..." oninput="filterHistory()"/>
+              <button class="btn-secondary" onclick="loadHistory()">↻ REFRESH</button>
+            </div>
+            <div class="table-wrapper">
+              <table class="data-table" id="history-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Input</th>
+                    <th>Mode</th>
+                    <th>Regex</th>
+                    <th>Classification</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="history-tbody">
+                  <tr><td colspan="6" class="table-empty">Click Refresh to load history.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ─── TAB: THEORY NOTES ─── -->
+      <section class="tab-panel" id="tab-theory">
+        <div class="panel-header">
+          <h2 class="panel-title">Theory Notes</h2>
+          <p class="panel-desc">Foundational compiler design concepts for your reference.</p>
+        </div>
+
+        <div id="theory-loading" class="empty-state">
+          <div class="spinner-ring"></div>
+          <p>Loading theory content...</p>
+        </div>
+
+        <div id="theory-grid" class="theory-grid hidden"></div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- TOAST NOTIFICATION -->
+  <div id="toast" class="toast hidden"></div>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+
+  <script src="/static/js/script.js"></script>
+  
+  <script>initDashboard();</script>
+</body>
+</html>
