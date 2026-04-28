@@ -1,16 +1,21 @@
 from flask import Flask, request, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
 import json
+import os
 from flask import render_template, redirect, url_for
 from database import db, User, Conversion
 from compiler_engine import process_input
 
 app = Flask(__name__)
 
-# CHANGE THIS FOR YOUR MYSQL DATABASE
-app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://root:#Ananya19@localhost/regexedu'
+db_url = (
+    os.environ.get("SQLALCHEMY_DATABASE_URI")
+    or os.environ.get("DATABASE_URL")
+    or "sqlite:///regexedu.db"
+)
+app.config["SQLALCHEMY_DATABASE_URI"] = db_url
 
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db.init_app(app)
 
@@ -178,4 +183,5 @@ def theory():
 # --------------------------
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    debug = os.environ.get("FLASK_DEBUG", "").strip() in ("1", "true", "True", "yes", "YES")
+    app.run(debug=debug)

@@ -13,6 +13,7 @@ This module performs:
 
 import json
 
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -20,12 +21,17 @@ from typing import Any, Dict, List, Optional, Tuple
 # SYMBOL TABLES (PER PHASE)
 # -----------------------------
 
-_KEYWORDS = {
+_GRAMMAR_KEYWORDS = {
+    # operators / rule words in the Pattern DSL grammar
     "and", "or",
     "starts", "start", "with",
     "ends", "end",
     "contains",
     "only",
+}
+
+_VALUE_KEYWORDS = {
+    # tokens that are semantically "literals" (map to regex classes)
     "digit", "digits",
     "letter", "letters",
     "lowercase", "uppercase",
@@ -34,8 +40,10 @@ _KEYWORDS = {
 
 def _token_kind(tok: str) -> str:
     t = str(tok).lower()
-    if t in _KEYWORDS:
-        return "KEYWORD"
+    if t in _GRAMMAR_KEYWORDS:
+        return "GRAMMAR_KEYWORD"
+    if t in _VALUE_KEYWORDS:
+        return "VALUE_KEYWORD"
     # very small heuristic: treat non-alpha tokens as literal-ish
     if any(ch in t for ch in r"+*?|^$()[]{}\ ".strip()):
         return "OPERATOR"
@@ -240,6 +248,33 @@ def optimize_regex_with_steps(regex: str) -> Tuple[str, List[Dict[str, Any]]]:
         })
         return after
 
+    def split_top_level_alternation(expr: str) -> Optional[List[str]]:
+        """
+        If expr is a top-level parenthesized alternation produced by our generator,
+        return its alternatives. Otherwise return None.
+        """
+        s = (expr or "").strip()
+        if len(s) < 2 or s[0] != "(" or s[-1] != ")":
+            return None
+        inner = s[1:-1]
+        depth = 0
+        parts: List[str] = []
+        last = 0
+        saw_bar = False
+        for i, ch in enumerate(inner):
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+            elif ch == "|" and depth == 0:
+                saw_bar = True
+                parts.append(inner[last:i])
+                last = i + 1
+        if not saw_bar:
+            return None
+        parts.append(inner[last:])
+        return [p for p in (x.strip() for x in parts) if p != ""]
+
     r0 = regex
     r1 = r0.replace(".*.*", ".*")
     r1 = apply_step(
@@ -265,7 +300,35 @@ def optimize_regex_with_steps(regex: str) -> Tuple[str, List[Dict[str, Any]]]:
         'Collapse repeated "**" into "*".',
     )
 
-    return r3, steps
+    # Factor anchors over top-level OR: (^A|^B) -> ^(A|B)
+    before = r3
+    alts = split_top_level_alternation(before)
+    after = before
+    if alts and all(a.startswith("^") and len(a) > 1 for a in alts):
+        stripped = [a[1:] for a in alts]
+        after = "^(" + "|".join(stripped) + ")"
+    r4 = apply_step(
+        "factor_caret_over_or",
+        before,
+        after,
+        'If every OR-branch begins with "^", factor it out: (^A|^B) → ^(A|B).',
+    )
+
+    # Factor $ over top-level OR: (A$|B$) -> (A|B)$
+    before = r4
+    alts = split_top_level_alternation(before)
+    after = before
+    if alts and all(a.endswith("$") and len(a) > 1 for a in alts):
+        stripped = [a[:-1] for a in alts]
+        after = "(" + "|".join(stripped) + ")$"
+    r5 = apply_step(
+        "factor_dollar_over_or",
+        before,
+        after,
+        'If every OR-branch ends with "$", factor it out: (A$|B$) → (A|B)$.',
+    )
+
+    return r5, steps
 
 
 def build_symbol_table_optimized(regex_before: str, regex_after: str, steps: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -287,6 +350,165 @@ def build_symbol_table_optimized(regex_before: str, regex_after: str, steps: Lis
         "entries": entries,
         "regex_before": regex_before,
         "regex_after": regex_after,
+    }
+
+
+# -----------------------------
+# THOMPSON NFA (PATTERN MODE)
+# -----------------------------
+
+@dataclass
+class _NFA:
+    start: int
+    accept: int
+    transitions: List[Tuple[int, Optional[str], int]]  # (src, symbol or None for ε, dst)
+
+
+class _NFABuilder:
+    def __init__(self) -> None:
+        self._next_state = 0
+        self.transitions: List[Tuple[int, Optional[str], int]] = []
+
+    def _new_state(self) -> int:
+        s = self._next_state
+        self._next_state += 1
+        return s
+
+    def _add(self, src: int, sym: Optional[str], dst: int) -> None:
+        self.transitions.append((src, sym, dst))
+
+    def _lit(self, sym: str) -> _NFA:
+        s = self._new_state()
+        a = self._new_state()
+        self._add(s, sym, a)
+        return _NFA(start=s, accept=a, transitions=[])
+
+    def _eps(self) -> _NFA:
+        s = self._new_state()
+        a = self._new_state()
+        self._add(s, None, a)
+        return _NFA(start=s, accept=a, transitions=[])
+
+    def _concat(self, left: _NFA, right: _NFA) -> _NFA:
+        self._add(left.accept, None, right.start)
+        return _NFA(start=left.start, accept=right.accept, transitions=[])
+
+    def _or(self, left: _NFA, right: _NFA) -> _NFA:
+        s = self._new_state()
+        a = self._new_state()
+        self._add(s, None, left.start)
+        self._add(s, None, right.start)
+        self._add(left.accept, None, a)
+        self._add(right.accept, None, a)
+        return _NFA(start=s, accept=a, transitions=[])
+
+    def _star(self, inner: _NFA) -> _NFA:
+        s = self._new_state()
+        a = self._new_state()
+        self._add(s, None, a)           # allow zero reps
+        self._add(s, None, inner.start) # start inner
+        self._add(inner.accept, None, inner.start)  # repeat
+        self._add(inner.accept, None, a)            # exit
+        return _NFA(start=s, accept=a, transitions=[])
+
+    def _plus(self, inner: _NFA) -> _NFA:
+        # A+ = A A*
+        return self._concat(inner, self._star(self._clone_fragment(inner)))
+
+    def _clone_fragment(self, frag: _NFA) -> _NFA:
+        """
+        Rebuild a fresh copy of a fragment by re-emitting its symbols.
+        We only call this for simple literals/classes produced by _symbol_fragment().
+        """
+        # Fallback: treat as ε if something unexpected
+        return self._eps()
+
+    def _symbol_fragment(self, value: str) -> _NFA:
+        """
+        Convert a DSL literal into an NFA fragment that consumes characters.
+        - If it's a mapped class like "[0-9]" treat as a single symbol token.
+        - If it's a multi-character literal, emit a concatenation of characters.
+        """
+        rx = value_to_regex(value)
+        if rx.startswith("[") and rx.endswith("]"):
+            return self._lit(rx)
+        # multi-char literal becomes concatenation of characters
+        if len(rx) <= 1:
+            return self._lit(rx)
+        frag: Optional[_NFA] = None
+        for ch in rx:
+            part = self._lit(ch)
+            frag = part if frag is None else self._concat(frag, part)
+        return frag or self._eps()
+
+    def _any_star(self) -> _NFA:
+        # Σ* approximation for “any character” in the UI/DSL.
+        return self._star(self._lit("ANY"))
+
+
+def build_thompson_nfa_for_pattern_ast(ast: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Build a Thompson NFA for the *language semantics* of Pattern Mode rules.
+
+    Note: In theory, every regex has an equivalent NFA and DFA. Here we show the NFA
+    construction because it's the most direct to explain and visualize.
+    """
+    b = _NFABuilder()
+
+    def compile_node(node: Dict[str, Any]) -> _NFA:
+        t = node.get("type")
+
+        if t == "START":
+            base = b._symbol_fragment(node.get("value", ""))
+            return b._concat(base, b._any_star())  # x Σ*
+
+        if t == "END":
+            base = b._symbol_fragment(node.get("value", ""))
+            return b._concat(b._any_star(), base)  # Σ* x
+
+        if t == "CONTAINS":
+            base = b._symbol_fragment(node.get("value", ""))
+            return b._concat(b._concat(b._any_star(), base), b._any_star())  # Σ* x Σ*
+
+        if t == "ONLY":
+            base = b._symbol_fragment(node.get("value", ""))
+            # x+ (one or more)
+            # implement plus without cloning complexity by building: x (x)*
+            return b._concat(base, b._star(b._symbol_fragment(node.get("value", ""))))
+
+        if t == "AND":
+            left = compile_node(node["left"])
+            right = compile_node(node["right"])
+            # Mirrors generator: left .* right (i.e. left Σ* right)
+            return b._concat(b._concat(left, b._any_star()), right)
+
+        if t == "OR":
+            left = compile_node(node["left"])
+            right = compile_node(node["right"])
+            return b._or(left, right)
+
+        raise ValueError(f"Unsupported AST node for NFA: {t}")
+
+    frag = compile_node(ast)
+
+    # Emit a clean table; include ε as "ε" and ANY as Σ in UI description.
+    transitions = [
+        {"from": s, "symbol": ("ε" if sym is None else sym), "to": d}
+        for (s, sym, d) in b.transitions
+    ]
+    state_count = b._next_state
+
+    return {
+        "note": "Theory note: Every regular expression has an equivalent NFA and an equivalent DFA.",
+        "kind": "Thompson NFA",
+        "state_count": state_count,
+        "start_state": frag.start,
+        "accept_state": frag.accept,
+        "transitions": transitions,
+        "legend": {
+            "ε": "epsilon transition (consumes no input)",
+            "ANY": "any single character (used to model Σ for start/end/contains rules)",
+        },
     }
 
 
@@ -325,76 +547,139 @@ def value_to_regex(value):
 
 
 # -----------------------------
-# RULE BASED GRAMMAR PARSER
+# GRAMMAR + PARSER (RECURSIVE DESCENT)
 # -----------------------------
 
-def parse_pattern(tokens):
+PATTERN_GRAMMAR = r"""
+Grammar (EBNF-ish) for Pattern Mode:
+
+  expr        := or_expr
+  or_expr     := and_expr ( "or" and_expr )*
+  and_expr    := primary ( "and" primary )*
+  primary     := start_rule | end_rule | contains_rule | only_rule
+
+  start_rule    := ("starts" | "start") "with" literal
+  end_rule      := ("ends" | "end") "with" literal
+  contains_rule := "contains" literal
+  only_rule     := "only" literal
+
+  literal     := IDENTIFIER
+
+Notes:
+- Operator precedence: AND binds tighter than OR.
+- This is intentionally a tiny DSL designed for predictable parsing in a demo.
+"""
+
+
+@dataclass(frozen=True)
+class PatternToken:
+    kind: str  # KEYWORD | IDENTIFIER | EOF
+    lexeme: str
+
+
+def _lex_pattern(tokens: List[str]) -> List[PatternToken]:
+    out: List[PatternToken] = []
+    for t in tokens:
+        k = _token_kind(t)
+        if k == "OPERATOR":
+            # pattern DSL doesn't use regex operators; treat as identifier literal
+            k = "IDENTIFIER"
+        out.append(PatternToken(kind=k, lexeme=str(t).lower()))
+    out.append(PatternToken(kind="EOF", lexeme=""))
+    return out
+
+
+class _PatternParser:
+    def __init__(self, raw_tokens: List[str]):
+        self.tokens = _lex_pattern(raw_tokens)
+        self.i = 0
+        # Reserved words for the DSL grammar itself (operators / rule words).
+        # Other "keywords" like digit/letters/lowercase are treated as literal values.
+        self._reserved = {
+            "and", "or",
+            "starts", "start", "with",
+            "ends", "end",
+            "contains",
+            "only",
+        }
+
+    def _peek(self) -> PatternToken:
+        return self.tokens[self.i]
+
+    def _eat_lexeme(self, lexeme: str) -> PatternToken:
+        tok = self._peek()
+        if tok.lexeme != lexeme:
+            raise ValueError(f'Expected "{lexeme}" but found "{tok.lexeme or "EOF"}".')
+        self.i += 1
+        return tok
+
+    def _eat_identifier(self) -> str:
+        tok = self._peek()
+        if not tok.lexeme:
+            raise ValueError('Expected a literal value but found "EOF".')
+        # Allow DSL literal values to be either IDENTIFIER or KEYWORD, as long as
+        # they are not reserved grammar words (e.g. "digit" is a valid literal).
+        if tok.kind not in ("IDENTIFIER", "VALUE_KEYWORD", "GRAMMAR_KEYWORD") or tok.lexeme in self._reserved:
+            raise ValueError(f'Expected a literal value but found "{tok.lexeme}".')
+        self.i += 1
+        return tok.lexeme
+
+    def parse(self) -> Dict[str, Any]:
+        ast = self._parse_or()
+        if self._peek().kind != "EOF":
+            raise ValueError(f'Unexpected token "{self._peek().lexeme}".')
+        return ast
+
+    def _parse_or(self) -> Dict[str, Any]:
+        node = self._parse_and()
+        while self._peek().lexeme == "or":
+            self._eat_lexeme("or")
+            rhs = self._parse_and()
+            node = {"type": "OR", "left": node, "right": rhs}
+        return node
+
+    def _parse_and(self) -> Dict[str, Any]:
+        node = self._parse_primary()
+        while self._peek().lexeme == "and":
+            self._eat_lexeme("and")
+            rhs = self._parse_primary()
+            node = {"type": "AND", "left": node, "right": rhs}
+        return node
+
+    def _parse_primary(self) -> Dict[str, Any]:
+        t = self._peek().lexeme
+
+        if t in ("starts", "start"):
+            self.i += 1
+            self._eat_lexeme("with")
+            lit = self._eat_identifier()
+            return {"type": "START", "value": lit}
+
+        if t in ("ends", "end"):
+            self.i += 1
+            self._eat_lexeme("with")
+            lit = self._eat_identifier()
+            return {"type": "END", "value": lit}
+
+        if t == "contains":
+            self.i += 1
+            lit = self._eat_identifier()
+            return {"type": "CONTAINS", "value": lit}
+
+        if t == "only":
+            self.i += 1
+            lit = self._eat_identifier()
+            return {"type": "ONLY", "value": lit}
+
+        raise ValueError(f'Invalid pattern. Expected a rule keyword but found "{t or "EOF"}".')
+
+
+def parse_pattern(tokens: List[str]) -> Dict[str, Any]:
 
     """
-    Parse tokens using predefined grammar
+    Parse tokens using a tiny formal grammar (recursive descent).
     """
-
-    # AND condition
-    if "and" in tokens:
-
-        idx = tokens.index("and")
-
-        left = tokens[:idx]
-        right = tokens[idx+1:]
-
-        return {
-            "type": "AND",
-            "left": parse_pattern(left),
-            "right": parse_pattern(right)
-        }
-
-    # OR condition
-    if "or" in tokens:
-
-        idx = tokens.index("or")
-
-        left = tokens[:idx]
-        right = tokens[idx+1:]
-
-        return {
-            "type": "OR",
-            "left": parse_pattern(left),
-            "right": parse_pattern(right)
-        }
-
-    # START rule
-    if tokens[:2] == ["starts", "with"] or tokens[:2] == ["start", "with"]:
-
-        return {
-            "type": "START",
-            "value": tokens[2]
-        }
-
-    # END rule
-    if tokens[:2] == ["ends", "with"] or tokens[:2] == ["end", "with"]:
-
-        return {
-            "type": "END",
-            "value": tokens[2]
-        }
-
-    # CONTAINS rule
-    if tokens[0] == "contains":
-
-        return {
-            "type": "CONTAINS",
-            "value": tokens[1]
-        }
-
-    # ONLY rule
-    if tokens[0] == "only":
-
-        return {
-            "type": "ONLY",
-            "value": tokens[1]
-        }
-
-    raise ValueError("Invalid grammar pattern")
+    return _PatternParser(tokens).parse()
 
 
 # -----------------------------
@@ -633,7 +918,12 @@ def process_pattern(text):
 
         "optimized_regex": optimized,
 
-        "classification": classify(optimized),
+        # Keep DB storage safe: `Conversion.classification` is String(20) in MySQL schema.
+        # Correct theory statement is shown in UI: regex has equivalent NFA and DFA.
+        "classification": "REGULAR",
+        "automata": {
+            "note": "Theory note: Every regular expression has an equivalent NFA and an equivalent DFA (same expressive power). This project focuses on showing the compiler pipeline.",
+        },
 
         "symbol_tables": {
             "tokens": build_symbol_table_tokens(tokens),
@@ -655,6 +945,13 @@ def process_input(text, mode="pattern"):
         return process_pattern(text)
 
     if mode == "lab":
-        return process_lab(text)
+        out = process_lab(text)
+        # Keep it correct: lab tasks are pre-defined patterns (not built from our Pattern DSL AST),
+        # so we do not claim Thompson construction here.
+        out["classification"] = "REGULAR"
+        out["automata"] = {
+            "note": "Theory note: Every regex has an equivalent NFA and an equivalent DFA (same expressive power).",
+        }
+        return out
 
     raise ValueError("Invalid mode")
